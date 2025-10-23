@@ -3,13 +3,12 @@ setlocal enabledelayedexpansion
 chcp 65001>nul
 cd %~dp0
 
-REM del /f /q git-batches-2.exe
-REM gcc -o git-batches-2.exe git-batches-2.c
+del /f /q merged-split-2.exe
+gcc -o merged-split-2.exe merged-split-2.c
 
 set start=%time%
 
-REM git-batches-2.py
-git-batches-2.exe commit-info.txt
+merged-split-2.exe d0000.bin-split
 
 set end=%time%
 call :TimeDiff start end diff
