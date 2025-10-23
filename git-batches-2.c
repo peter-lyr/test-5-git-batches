@@ -164,152 +164,68 @@ void get_directory_path(const char *filepath, char *dirpath,
 // 分割大文件
 int split_large_file(const char *filepath, long long file_size,
                      char split_files[][MAX_PATH_LENGTH], int *num_parts) {
+  printf("开始分割文件: %s (%.2f MB)\n", filepath,
+         file_size / (1024.0 * 1024.0));
+  fflush(stdout); // 立即刷新输出
+
   FILE *src_file = fopen(filepath, "rb");
   if (!src_file) {
-    printf("错误: 无法打开文件 %s\n", filepath);
+    printf("错误: 无法打开源文件 %s\n", filepath);
     return 0;
   }
+  printf("成功打开源文件\n");
+
+  // 计算需要分割的份数
+  *num_parts = (file_size + SPLIT_PART_SIZE - 1) / SPLIT_PART_SIZE;
+  printf("需要分割为 %d 个部分，每个部分 %.2f MB\n", *num_parts,
+         SPLIT_PART_SIZE / (1024.0 * 1024.0));
 
   // 创建分割文件目录
   char split_dir[MAX_PATH_LENGTH];
   _snprintf_s(split_dir, sizeof(split_dir), _TRUNCATE, "%s-split", filepath);
 
+  printf("分割目录: %s\n", split_dir);
+
+  // 检查分割目录是否存在，如果存在则删除
   wchar_t *wsplit_dir = char_to_wchar(split_dir);
   DWORD attr = GetFileAttributesW(wsplit_dir);
 
-  // 检查分割目录是否存在
   if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
-    printf("分割目录已存在: %s\n", split_dir);
+    printf("分割目录已存在，删除并重新创建...\n");
 
-    // 计算现有分割文件的总大小
-    long long existing_total_size = 0;
-    int existing_file_count = 0;
-    char existing_files[100][MAX_PATH_LENGTH];
+    // 使用 SHFileOperation 删除目录及其内容
+    SHFILEOPSTRUCTW file_op = {.hwnd = NULL,
+                               .wFunc = FO_DELETE,
+                               .pFrom = wsplit_dir,
+                               .pTo = NULL,
+                               .fFlags = FOF_NOCONFIRMATION | FOF_SILENT |
+                                         FOF_NOERRORUI};
 
-    // 遍历分割目录中的文件
-    wchar_t search_path[MAX_PATH_LENGTH];
-    _snwprintf_s(search_path, MAX_PATH_LENGTH, _TRUNCATE, L"%s\\*", wsplit_dir);
-
-    WIN32_FIND_DATAW find_data;
-    HANDLE hFind = FindFirstFileW(search_path, &find_data);
-
-    if (hFind != INVALID_HANDLE_VALUE) {
-      do {
-        if (wcscmp(find_data.cFileName, L".") == 0 ||
-            wcscmp(find_data.cFileName, L"..") == 0) {
-          continue;
-        }
-
-        // 只处理文件，忽略子目录
-        if (!(find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-          wchar_t full_path[MAX_PATH_LENGTH];
-          _snwprintf_s(full_path, MAX_PATH_LENGTH, _TRUNCATE, L"%s\\%s",
-                       wsplit_dir, find_data.cFileName);
-
-          // 获取文件大小
-          HANDLE hFile =
-              CreateFileW(full_path, GENERIC_READ, FILE_SHARE_READ, NULL,
-                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-          if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD sizeLow, sizeHigh;
-            sizeLow = GetFileSize(hFile, &sizeHigh);
-            long long part_size = ((ULONGLONG)sizeHigh << 32) | sizeLow;
-            CloseHandle(hFile);
-
-            existing_total_size += part_size;
-
-            // 保存现有文件路径
-            if (existing_file_count < 100) {
-              char *char_path = wchar_to_char(full_path);
-              strcpy_s(existing_files[existing_file_count], MAX_PATH_LENGTH,
-                       char_path);
-              existing_file_count++;
-              free(char_path);
-            }
-          }
-        }
-      } while (FindNextFileW(hFind, &find_data));
-      FindClose(hFind);
-    }
-
-    printf("现有分割文件总大小: %.2f MB, 原文件大小: %.2f MB\n",
-           existing_total_size / (1024.0 * 1024.0),
-           file_size / (1024.0 * 1024.0));
-
-    // 检查大小是否一致
-    if (existing_total_size == file_size && existing_file_count > 0) {
-      printf("分割文件大小匹配，使用现有文件\n");
-
-      // 复制现有文件路径到结果数组
-      *num_parts = existing_file_count;
-      for (int i = 0; i < existing_file_count; i++) {
-        strcpy_s(split_files[i], MAX_PATH_LENGTH, existing_files[i]);
-        printf("使用现有分割文件: %s\n", existing_files[i]);
-      }
-
-      fclose(src_file);
+    int result = SHFileOperationW(&file_op);
+    if (result != 0) {
+      printf("错误: 无法删除现有分割目录，错误代码: %d\n", result);
       free(wsplit_dir);
-      return 1;
-    } else {
-      printf("分割文件大小不匹配或文件数量为0，删除现有文件并重新分割\n");
-
-      // 删除目录中的所有文件（但不删除目录本身）
-      wchar_t delete_search_path[MAX_PATH_LENGTH];
-      _snwprintf_s(delete_search_path, MAX_PATH_LENGTH, _TRUNCATE, L"%s\\*",
-                   wsplit_dir);
-
-      WIN32_FIND_DATAW delete_find_data;
-      HANDLE hDeleteFind =
-          FindFirstFileW(delete_search_path, &delete_find_data);
-
-      if (hDeleteFind != INVALID_HANDLE_VALUE) {
-        do {
-          if (wcscmp(delete_find_data.cFileName, L".") == 0 ||
-              wcscmp(delete_find_data.cFileName, L"..") == 0) {
-            continue;
-          }
-
-          wchar_t delete_file_path[MAX_PATH_LENGTH];
-          _snwprintf_s(delete_file_path, MAX_PATH_LENGTH, _TRUNCATE, L"%s\\%s",
-                       wsplit_dir, delete_find_data.cFileName);
-
-          if (delete_find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            // 递归删除子目录
-            SHFILEOPSTRUCTW file_op = {.hwnd = NULL,
-                                       .wFunc = FO_DELETE,
-                                       .pFrom = delete_file_path,
-                                       .pTo = NULL,
-                                       .fFlags = FOF_NOCONFIRMATION |
-                                                 FOF_SILENT | FOF_NOERRORUI};
-            SHFileOperationW(&file_op);
-          } else {
-            // 删除文件
-            DeleteFileW(delete_file_path);
-          }
-        } while (FindNextFileW(hDeleteFind, &delete_find_data));
-        FindClose(hDeleteFind);
-      }
-
-      printf("已清理分割目录中的文件\n");
-    }
-  } else {
-    // 目录不存在，创建新目录
-    if (!CreateDirectoryA(split_dir, NULL)) {
-      printf("错误: 无法创建分割目录 %s\n", split_dir);
       fclose(src_file);
-      free(wsplit_dir);
       return 0;
     }
-    printf("创建分割目录: %s\n", split_dir);
+    printf("成功删除现有分割目录\n");
   }
 
+  // 创建新目录
+  if (!CreateDirectoryW(wsplit_dir, NULL)) {
+    DWORD error = GetLastError();
+    if (error != ERROR_ALREADY_EXISTS) {
+      printf("错误: 无法创建分割目录，错误代码: %lu\n", error);
+      free(wsplit_dir);
+      fclose(src_file);
+      return 0;
+    }
+  }
+  printf("成功创建分割目录\n");
   free(wsplit_dir);
 
-  // 计算需要分割的份数
-  *num_parts = (file_size + SPLIT_PART_SIZE - 1) / SPLIT_PART_SIZE;
-
   const char *filename = get_file_name(filepath);
-  const char *extension = get_file_extension(filename);
+  printf("文件名: %s\n", filename);
 
   // 分割文件
   int success = 1;
@@ -318,14 +234,7 @@ int split_large_file(const char *filepath, long long file_size,
     _snprintf_s(part_filename, sizeof(part_filename), _TRUNCATE,
                 "%s\\%s-part%04d", split_dir, filename, i + 1);
 
-    // 检查文件是否已存在（在清理后应该不存在，但为了安全还是检查）
-    FILE *test_file = fopen(part_filename, "rb");
-    if (test_file) {
-      fclose(test_file);
-      printf("分割文件已存在，跳过: %s\n", part_filename);
-      strcpy_s(split_files[i], MAX_PATH_LENGTH, part_filename);
-      continue;
-    }
+    printf("创建分割文件 %d: %s\n", i + 1, part_filename);
 
     FILE *dst_file = fopen(part_filename, "wb");
     if (!dst_file) {
@@ -334,40 +243,67 @@ int split_large_file(const char *filepath, long long file_size,
       break;
     }
 
-    // 复制数据
-    long long bytes_remaining = (i == *num_parts - 1)
-                                    ? file_size - (SPLIT_PART_SIZE * i)
-                                    : SPLIT_PART_SIZE;
-    char buffer[64 * 1024]; // 64KB缓冲区
+    // 计算当前部分的大小
+    long long part_size = (i == *num_parts - 1)
+                              ? file_size - (SPLIT_PART_SIZE * i)
+                              : SPLIT_PART_SIZE;
 
-    while (bytes_remaining > 0) {
+    printf("分割部分 %d 大小: %.2f MB\n", i + 1, part_size / (1024.0 * 1024.0));
+
+    // 复制数据
+    long long bytes_remaining = part_size;
+    char buffer[64 * 1024]; // 64KB缓冲区
+    long long total_copied = 0;
+
+    while (bytes_remaining > 0 && success) {
       size_t bytes_to_read = (bytes_remaining > sizeof(buffer))
                                  ? sizeof(buffer)
                                  : (size_t)bytes_remaining;
+
       size_t bytes_read = fread(buffer, 1, bytes_to_read, src_file);
 
-      if (bytes_read == 0)
+      if (bytes_read == 0) {
+        if (feof(src_file)) {
+          printf("到达文件末尾\n");
+        } else if (ferror(src_file)) {
+          printf("读取文件错误\n");
+          success = 0;
+        }
         break;
+      }
 
       size_t bytes_written = fwrite(buffer, 1, bytes_read, dst_file);
       if (bytes_written != bytes_read) {
-        printf("错误: 写入分割文件失败 %s\n", part_filename);
+        printf("错误: 写入分割文件失败，期望写入 %zu 字节，实际写入 %zu 字节\n",
+               bytes_read, bytes_written);
         success = 0;
         break;
       }
 
       bytes_remaining -= bytes_read;
+      total_copied += bytes_read;
+
+      // 每拷贝 10MB 输出一次进度
+      if (total_copied % (10 * 1024 * 1024) == 0) {
+        printf("分割部分 %d 进度: %.2f/%.2f MB (%.1f%%)\n", i + 1,
+               total_copied / (1024.0 * 1024.0), part_size / (1024.0 * 1024.0),
+               (double)total_copied / part_size * 100);
+        fflush(stdout);
+      }
     }
 
     fclose(dst_file);
 
-    if (!success)
+    if (!success) {
+      printf("分割部分 %d 失败\n", i + 1);
       break;
+    }
+
+    printf("成功创建分割部分 %d: %s (%.2f MB)\n", i + 1, part_filename,
+           part_size / (1024.0 * 1024.0));
 
     // 保存分割文件路径
     strcpy_s(split_files[i], MAX_PATH_LENGTH, part_filename);
-    printf("创建分割文件: %s (%.2f MB)\n", part_filename,
-           SPLIT_PART_SIZE / (1024.0 * 1024.0));
   }
 
   fclose(src_file);
