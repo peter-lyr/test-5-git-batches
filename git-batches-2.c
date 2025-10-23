@@ -252,7 +252,7 @@ int split_large_file(const char *filepath, long long file_size,
 
     // 复制数据
     long long bytes_remaining = part_size;
-    char buffer[64 * 1024]; // 64KB缓冲区
+    char buffer[1024 * 1024]; // 1024KB缓冲区
     long long total_copied = 0;
 
     while (bytes_remaining > 0 && success) {
